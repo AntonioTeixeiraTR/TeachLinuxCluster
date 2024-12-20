@@ -13,7 +13,7 @@ if you happen to not have access, ask Stephanie Lorefice for it she will be able
 
   vagrant-2.4.3-1.x86_64
 
-   # vagrant plugin list
+   # vagrant plugin list < -- after you have the above package installed you run this to get the output bellow.
      vagrant-persistent-storage (0.0.50, global)
  
 
@@ -30,7 +30,9 @@ if you happen to not have access, ask Stephanie Lorefice for it she will be able
 
   # To start the environemt in the directory that have the vagrantfile of your linux, all you have to do is :
 
-  vagrant up ( or vagrant up --provider=vbox if you have more than one hypervisor in your system )
+    vagrant up 
+    or 
+    vagrant up --provider=vbox   (if you have more than one hypervisor in your system )
 
 The Vagrantfile predict a very big usage of memory and cpu of your phisical machine, if you have the resources, fine go with it, if not you will have to adjust it to what you have and wait a little longer to the provision to complete.
 
