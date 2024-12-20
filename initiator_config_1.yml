@@ -1,0 +1,129 @@
+---
+ - hosts: node1
+   become: true
+   gather_facts: yes
+   tasks:
+# Install the iscsi-initiator package to configure iscsi client
+   - name: " Enable High availability repo "
+     ansible.builtin.raw: yum config-manager --set-enabled highavailability
+#   - name: " Update the OS "
+#     ansible.builtin.dnf:
+#       name: "*" 
+   - name: " Install Packages"
+     ansible.builtin.dnf:
+       name: 
+         - iscsi-initiator-utils 
+         - sshpass
+         - corosync
+         - pacemaker
+         - pcs
+         - fence-agents-all
+         - fence-virt
+         - httpd
+         - nmap
+       state: latest
+       update_cache: yes
+#   - name: " Reboot a slow machine that might have lots of updates to apply "
+#     ansible.builtin.reboot:
+#       reboot_timeout: 3600
+# Put firewall rules to allow tcp & udp cluster ports
+   - name: " Enable firewall  and install apache"
+     ansible.posix.firewalld:
+       service: "{{ item }}"
+       permanent: yes
+       state: enabled
+     loop:
+       - high-availability
+       - http
+       - https
+# Restart firewall service to validade iscsi-target        
+   - name: " Restart firewall service for the new rules"
+     ansible.builtin.service:
+       name: firewalld
+       state: restarted
+# Copy the ACL file to be the same hostname in the TARGET server
+   - name: " Configure the ACL name for correct access node1 "
+     ansible.builtin.copy:
+       src: /mnt/Organizados/Profissional/software/git-repos/Linux-Trainning/ISCSI_CLUSTER/node1/initiatorname.iscsi
+       dest: /etc/iscsi/initiatorname.iscsi
+       remote_src: false
+       owner: root
+       group: root
+       mode: '0644'
+   - name: " Restart iscsi service to validate the new ACLs configured "
+     ansible.builtin.service:
+       name: iscsid
+       state: restarted
+   - name: " Perform the Discovery "
+     raw: /usr/sbin/iscsiadm --mode discovery --type sendtargets --portal 172.17.0.100 --discover 172.17.0.100:3260,1 iqn.2021-05.com.example.iscsi:cluster
+   - name: " Now the commands to configure the iscsi device "
+     raw: /usr/sbin/iscsiadm --mode node --targetname iqn.2021-05.com.example.iscsi:cluster  --login
+   - name: " Change root password "
+     user: 
+       name: root
+       password: $6$lWe4vusxeUV7SRZ9$dZRwa0Yg7XD.L3J5KHazeSPQit8C3tbhsVZNdm8jVUwS9TORql5iaNoIety3xrmAvEQyvyYSs1BUdJvTmyY6W0 # Done with openssl
+   - name: " Unlock user root "
+     raw: passwd -uk root
+   - name: "Enable root Login"
+     raw: sed -i -e 's/^#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config     
+   - name: " Change options in ssh to permit login with password "
+     raw: sed -i -e 's/^#PasswordAuthentication no/^PasswordAuthentication yes/' /etc/ssh/sshd_config
+   - name: " Accept challenge authentication "
+     raw: sed -i -e 's/^ChallengeResponseAuthentication no/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
+   - name: " restart ssh service "
+     ansible.builtin.service:
+       name: sshd
+       state: restarted
+   - name: " Generate rsa key to root for the second node "
+     raw: ssh-keygen -b 2048 -t rsa -f /root/.ssh/id_rsa -q -N ""
+   - name: " put the hostnames for the cluster and keys in hosts "
+     raw: echo "192.168.200.101 node1" >> /etc/hosts && echo "192.168.200.102 node2" >> /etc/hosts
+# #########################################################################################################################################
+# THIS LAST COMMAND DOES NOT WORK HERE BECAUSE VAGRANT RUNS THINGS SEQUENTIALLY AS SUCH, node2 IS NOT YET CREATED                         #
+# SO TO CORRECT THIS BEHAVIOR I RAN THE COMMAND FROM THE NODE2 AFTER CREATION AND IT WORKED AS REQUIRED. AS SUCH, MANY COMMANDS WILL BE   #
+# DONE AS RAW MODULE COMMANDS IN ORDER TO DO THINGS TO HAVE NODE2 AS PRIMARY AND NODE1 AS SECONDARY                                       #
+# #########################################################################################################################################
+#   - name: " Copy the key to the node2 "
+#     raw: sshpass -p vagrant ssh-copy-id -i ~/.ssh/id_rsa.pub -o StrictHostKeyChecking=no root@node2
+   - name: " Copy the corosync config file in order to start the service later from node2 "
+     ansible.builtin.copy:
+       src: /mnt/Organizados/Profissional/software/git-repos/Linux-Trainning/ISCSI_CLUSTER/node1/corosync.conf
+       dest: /etc/corosync/corosync.conf
+       remote_src: false
+       owner: root
+       group: root
+       mode: '0644'
+   - name: " Create hacluster user with hacluster password "  # since this is a pure lab there is no harm in doing this here
+     ansible.builtin.user:
+       name: hacluster
+       comment: needed for cluster 
+       password: "$6$POU7uAb6mC8ELCAy$a44O37H9xSoLGrLtUZ/X27d03UL5XAv31WbehVCe4Cvu1gIfjVu/zAey8O5TzPlzuO2MXf0tmYxePC1ZPFxFV/"
+##########################################################################################################################################
+#                                                                                                                                        #
+#This is the portion where whe have to use a fencing device not existent to cluster                                                      #
+#                                                                                                                                        #
+##########################################################################################################################################
+ 
+   - name: " Create the user for the fence device created "
+     ansible.builtin.user:
+       name: fence
+       generate_ssh_key: yes
+       comment: fence device user
+       password: "$6$POU7uAb6mC8ELCAy$a44O37H9xSoLGrLtUZ/X27d03UL5XAv31WbehVCe4Cvu1gIfjVu/zAey8O5TzPlzuO2MXf0tmYxePC1ZPFxFV/"
+   - name: " Put the fence hostnames inside the hosts file "
+     raw: echo " 192.168.30.101 fence-node1" >> /etc/hosts && echo " 192.168.30.102 fence-node2" >> /etc/hosts
+# This was  comented because there is the ":" error for the content of sudoers file
+#   - name: " create the SUDOERS file for the fence user and the needed line for STONITH the servers "
+#     raw: touch /etc/sudoers.d/fence && echo "fence ALL = NOPASSWD: /sbin/shutdown" >> /etc/sudoers.d/fence
+   - name: " Copy the necesary sudoer file for the fence activity "
+     ansible.builtin.copy:
+       src: /mnt/Organizados/Profissional/software/git-repos/Linux-Trainning/ISCSI_CLUSTER/fence_sudoer
+       dest: /etc/sudoers.d/fence
+       owner: root
+       group: root
+       mode: '0640'
+# THIS WAS SUPOSE TO BE ORIGINALLY CREATED IN NODE 2 but somehow by confusion I put these lines here and with user root at the end, should be fence.
+#   - name: " Copy the key from node2 to node1 "
+#     raw: sudo -u fence sshpass -p hacluster ssh-copy-id -i ~/.ssh/id_rsa.pub -o StrictHostKeyChecking=no root@node1
+#   - name: " Copy the key from node1 to node2 "
+#     raw: ssh node1 sudo -u fence sshpass -p hacluster ssh-copy-id -i ~/.ssh/id_rsa.pub -o StrictHostKeyChecking=no root@node2

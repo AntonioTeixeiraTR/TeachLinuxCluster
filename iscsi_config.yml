@@ -1,0 +1,46 @@
+---
+- hosts: iscsi
+  become: true
+  gather_facts: yes
+  tasks:
+# Install the package for iSCSI server
+  - name: "Install the iscsi packages for rocky linux 8"
+    yum:
+      name: "targetcli"
+      state: latest
+      update_cache: yes  
+  - name: " Start firewall service "
+    ansible.builtin.service:
+      name: firewalld
+      state: started
+# Put firewall rules to allow tcp & udp in 3206 port
+  - name: " Enable tcp firewall port for the iSCSI "
+    ansible.posix.firewalld:
+      service: iscsi-target
+      permanent: yes
+      state: enabled
+# Restart firewall service to validade iscsi-target        
+  - name: " Restart firewall service for the new rules"
+    ansible.builtin.service:
+      name: firewalld
+      state: restarted
+# Put SELinux in permissive mode to avoid problems
+  - name: Put SELinux in permissive mode, logging actions that would be blocked.
+    ansible.posix.selinux:
+      policy: targeted
+      state: permissive
+# Copy the JSON file with necessary configuration for the iSCSI Shared Disk
+  - name: Install JSON file with target iscsi server configurations
+    ansible.builtin.copy:
+      src: /mnt/Organizados/Profissional/software/git-repos/Linux-Trainning/ISCSI_CLUSTER/iscsi/saveconfig.json
+      dest: /etc/target/saveconfig.json
+      remote_src: false
+      owner: root
+      group: root
+      mode: '0644'
+# RESTART TARGET SERVICE to load the new configuration
+  - name: RESTART target service
+    ansible.builtin.service:
+      name: target
+      state: restarted
+

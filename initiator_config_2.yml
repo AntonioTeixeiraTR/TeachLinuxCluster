@@ -1,0 +1,164 @@
+---
+ - hosts: node2
+   become: true
+   gather_facts: yes
+   tasks:
+# Install the iscsi-initiator package to configure iscsi client
+   - name: " Enable High Availability repository"
+     ansible.builtin.raw: yum config-manager --set-enabled highavailability
+   - name: " Install Packages"
+     ansible.builtin.dnf:
+       name: 
+         - iscsi-initiator-utils
+         - sshpass
+         - corosync
+         - pacemaker
+         - pcs
+         - fence-agents-all
+         - fence-virt
+         - httpd
+       state: latest
+       update_cache: yes
+# Put firewall rules to allow tcp & udp cluster ports
+   - name: " Enable firewall port for the cluster "
+     ansible.posix.firewalld:
+       service: "{{ item }}"
+       permanent: yes
+       state: enabled
+     loop:
+       - high-availability
+       - http
+       - https
+# Restart firewall service to validade iscsi-target        
+   - name: " Restart firewall service for the new rules"
+     ansible.builtin.service:
+       name: firewalld
+       state: restarted
+# Copy the ACL file to be the same hostname in the TARGET server
+   - name: " Configure the ACL name for correct access node2"
+     ansible.builtin.copy:
+       src: /mnt/Organizados/Profissional/software/git-repos/Linux-Trainning/ISCSI_CLUSTER/node2/initiatorname.iscsi
+       dest: /etc/iscsi/initiatorname.iscsi
+       remote_src: false
+       owner: root
+       group: root
+       mode: '0644'
+   - name: " Restart iscsi service to validate the new ACLs configured "
+     ansible.builtin.service:
+       name: iscsid
+       state: restarted
+   - name: " Perform the Discovery "     
+     raw: /usr/sbin/iscsiadm --mode discovery --type sendtargets --portal 172.17.0.100 --discover 172.17.0.100:3260,1 iqn.2021-05.com.example.iscsi:cluster
+   - name: " Now the commands to configure the iscsi device "
+     raw: /usr/sbin/iscsiadm --mode node --targetname iqn.2021-05.com.example.iscsi:cluster  --login
+   - name: " Change root password "
+     user:
+       name: root
+       password: $6$lWe4vusxeUV7SRZ9$dZRwa0Yg7XD.L3J5KHazeSPQit8C3tbhsVZNdm8jVUwS9TORql5iaNoIety3xrmAvEQyvyYSs1BUdJvTmyY6W0 # Generated with openssl passwd -6 vagrant
+   - name: " Unlock user root "
+     raw: passwd -uk root    
+   - name: "Enable root Login"
+     raw: sed -i -e 's/^#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+   - name: " Change options in ssh to permit login with password "
+     raw: sed -i -e 's/^#PasswordAuthentication no/^PasswordAuthentication yes/' /etc/ssh/sshd_config
+   - name: " Accept challenge authentication "
+     raw: sed -i -e 's/^ChallengeResponseAuthentication no/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
+   - name: " restart ssh service "
+     ansible.builtin.service:
+       name: sshd
+       state: restarted
+   - name: " Generate rsa key to root for the second node "
+     raw: ssh-keygen -b 2048 -t rsa -f /root/.ssh/id_rsa -q -N ""
+   - name: " put the hostnames for the cluster and keys in hosts "
+     raw: echo "192.168.200.101 node1" >> /etc/hosts && echo "192.168.200.102 node2" >> /etc/hosts
+   - name: " Copy the key to the node1 "
+     raw: sshpass -p vagrant ssh-copy-id -f -i ~/.ssh/id_rsa.pub -o StrictHostKeyChecking=no root@node1
+   - name: "Copy the key from node1 to node2 "
+     raw: ssh node1 sshpass -p vagrant ssh-copy-id -i ~/.ssh/id_rsa.pub -o StrictHostKeyChecking=no root@node2
+   - name: " Copy the corosync config file in order to start the service later from node2 "
+     ansible.builtin.copy:
+       src: /mnt/Organizados/Profissional/software/git-repos/Linux-Trainning/ISCSI_CLUSTER/node2/corosync.conf
+       dest: /etc/corosync/corosync.conf
+       remote_src: false
+       owner: root
+       group: root
+       mode: '0644'
+#########################################################################################################################
+#                                                                                                                       #
+#FROM THIS POINT ON WE ARE GOING TO CONFIGURE THE CLUSTER and CREATE RESOURCES                                          #
+#                                                                                                                       #
+#                                                                                                                       #
+#########################################################################################################################
+   - name: " START COROSYNC in BOTH HOSTS "
+     raw: ssh node1 systemctl enable corosync && systemctl enable corosync && ssh node1 systemctl start corosync && systemctl start corosync
+   - name: " Create hacluster user with hacluster password "  # since this is a pure lab there is no harm in doing this here
+     ansible.builtin.user:
+       name: hacluster
+       comment: needed for cluster 
+       password: "$6$POU7uAb6mC8ELCAy$a44O37H9xSoLGrLtUZ/X27d03UL5XAv31WbehVCe4Cvu1gIfjVu/zAey8O5TzPlzuO2MXf0tmYxePC1ZPFxFV/"
+   - name: "Enable and start pacemaker in both nodes"
+     raw: ssh node1 systemctl enable pacemaker && systemctl enable pacemaker && ssh node1 systemctl start pacemaker && systemctl start pacemaker
+   - name: "Enable and start pcsd in both nodes"
+     raw: ssh node1 systemctl enable pcsd && systemctl enable pcsd && ssh node1 systemctl start pcsd && systemctl start pcsd
+   - name: "Create a backup of the corosync files"
+     raw: ssh node1 cp -p /etc/corosync/corosync.conf /etc/corosync/corosync.bkp && cp -p /etc/corosync/corosync.conf /etc/corosync/corosync.bkp
+   - name: " Authenticate the nodes with each other "
+     raw: pcs cluster auth -u hacluster -p hacluster
+   - name: "Setup the cluster to start it"
+     raw: pcs cluster setup TRCluster node1 node2 --force
+   - name: " copy the backed up corosync files "
+     raw: ssh node1 cp -p /etc/corosync/corosync.bkp /etc/corosync/corosync.conf && cp -p /etc/corosync/corosync.bkp /etc/corosync/corosync.conf
+   - name: "NOW START THE CLUSTER !!!"
+     raw: pcs cluster start --all
+   - name: " Disable stonith and create the first resource in the cluster "
+     raw: pcs property set stonith-enabled=false && pcs resource create ClusterVIP ocf:heartbeat:IPaddr2 ip=192.168.200.103 cidr_netmask=24 nic=eth2
+   - name: " Create the apache Web Server resource in the cluster "
+     raw: pcs resource create TRWebSrv ocf:heartbeat:apache configfile=/etc/httpd/conf/httpd.conf
+   - name: " Now we put the recources to start in a given order "
+     raw: pcs constraint colocation add ClusterVIP with TRWebSrv && pcs constraint order set ClusterVIP TRWebSrv
+   - name: " Now we create a resourcegroup to put all inside "
+     raw: pcs resource group add TRWebCluster ClusterVIP TRWebSrv
+##########################################################################################################################################
+#                                                                                                                                        #
+#This is the portion where whe have to use a fencing device not existent to cluster                                                      #
+#                                                                                                                                        #
+##########################################################################################################################################
+ 
+   - name: " Create the user for the fence device created "
+     ansible.builtin.user:
+       name: fence
+       generate_ssh_key: yes
+       comment: fence device user
+       password: "$6$POU7uAb6mC8ELCAy$a44O37H9xSoLGrLtUZ/X27d03UL5XAv31WbehVCe4Cvu1gIfjVu/zAey8O5TzPlzuO2MXf0tmYxePC1ZPFxFV/"
+   - name: " Put the fence hostnames inside the hosts file "
+     raw: echo " 192.168.30.101 fence-node1" >> /etc/hosts && echo " 192.168.30.102 fence-node2" >> /etc/hosts
+# This RAW module below were comented because of a : in the sudoers instruction line
+#   - name: " create the SUDOERS file for the fence user and the needed line for STONITH the servers "
+#     raw: touch /etc/sudoers.d/fence && echo "fence ALL = NOPASSWD: /sbin/shutdown" >> /etc/sudoers.d/fence
+   - name: " Copy the neecssary sudoer file for the fence activity "
+     ansible.builtin.copy:
+       src: /mnt/Organizados/Profissional/software/git-repos/Linux-Trainning/ISCSI_CLUSTER/fence_sudoer
+       dest: /etc/sudoers.d/fence
+       owner: root
+       group: root
+       mode: '0640'
+
+   - name: " Copy the FENCE device to the directory to be used "
+     ansible.builtin.copy:
+       src: /mnt/Organizados/Profissional/software/git-repos/Linux-Trainning/ISCSI_CLUSTER/fence_ssh
+       dest: /usr/sbin/fence_ssh
+       owner: root
+       group: root
+       mode: '0775'
+
+   - name: " Copy the key from node2 to node1 "
+     raw: runuser -l fence  -c 'sshpass -p hacluster ssh-copy-id -i ~/.ssh/id_rsa.pub -o StrictHostKeyChecking=no fence@fence-node1'
+#   - name: " GAMBIARRA pq nao to conseguindo mais pensar "
+#     raw: ssh node1 echo "runuser -l fence -c sshpass -p hacluster ssh-copy-id -i ~/.ssh/id_rsa.pub -o StrictHostKeyChecking=no fence@fence-node2" >>/root/copykey && ssh node1 bash /root/copykey
+   - name: " Copy the key from node1 to node2 "
+     raw: ssh root@node1 echo 'runuser -l fence -c $(sshpass -p hacluster ssh-copy-id -i /home/fence/.ssh/id_rsa.pub -o StrictHostKeyChecking=no fence@fence-node2)'
+
+   - name: " Declare the fence inside the cluster and put the constraint node1 "
+     raw: pcs stonith create stonith-ssh-1 fence_ssh user=fence sudo=true private-key="/home/fence/.ssh/id_rsa" hostname="fence-node1" pcmk_host_list="node1" --force --disabled && pcs constraint location stonith-ssh-1 avoids node1
+   - name: " Declare the fence inside the cluster and put the constraint node2 "
+     raw: pcs stonith create stonith-ssh-2 fence_ssh user=fence sudo=true private-key="/home/fence/.ssh/id_rsa" hostname="fence-node2" pcmk_host_list="node2" --force --disabled && pcs constraint location stonith-ssh-2 avoids node2
