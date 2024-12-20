@@ -13,9 +13,9 @@ if you happen to not have access, ask Stephanie Lorefice for it she will be able
 
   vagrant-2.4.3-1.x86_64
 
-  [root@ryzen9 ~]# vagrant plugin list
-  vagrant-persistent-storage (0.0.50, global)
-  [root@ryzen9 ~]#
+   # vagrant plugin list
+     vagrant-persistent-storage (0.0.50, global)
+ 
 
   ** I am using Fedora 42 alpha version, but this works in all modern linux distributions that you might want use.
   Ps.: I did not test it in Windows Service for Linux implementations or NESTED virtualization with KVM, but you are more than welcome to be a pionner and document this effort.
